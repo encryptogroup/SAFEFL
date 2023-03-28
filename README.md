@@ -1,2 +1,3 @@
 # SAFEFL
 SAFEFL: MPC-friendly Framework for Private and Robust Federated Learning
+This repository hosts the implementation of the proposed "SAFEFL" framework, a privacy-preserving and resilient federated learning approach optimized for secure multi-party computation (MPC) environments. The framework was introduced in the research paper titled "SAFEFL: MPC-friendly Framework for Private and Robust Federated Learning," which has been accepted for presentation at the upcoming DLS'23@SP conference. The codebase includes the necessary modules and dependencies to enable seamless deployment and replication of the proposed SAFEFL framework.
