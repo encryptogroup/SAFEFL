@@ -139,3 +139,9 @@ data/HAR
 # MP-SPDZ framework
 mpspdz
 mp-spdz-0.3.2.tar.xz
+!mpspdz/run_aggregation.sh
+!mpspdz/ExternalIO/client.py
+!mpspdz/ExternalIO/domains.py
+!mpspdz/ExternalIO/mpc_client.py
+!mpspdz/Programs/Source/mpc_fltrust_server.mpc
+!mpspdz/Programs/Source/mpc_fedavg_server.mpc

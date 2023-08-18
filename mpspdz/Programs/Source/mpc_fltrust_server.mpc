@@ -1,0 +1,135 @@
+from Compiler.types import sint, regint, Array, MemValue
+from Compiler.library import print_ln, do_while, for_range, for_range_parallel
+from Compiler.util import if_else
+from Compiler import ml, mpc_math
+
+program.options_from_args()
+sfix.set_precision(12)
+
+PORTNUM = int(program.args[1])
+PARAM_NUM = int(program.args[2])
+WORKERS = int(program.args[3])
+ITERATIONS = int(program.args[4])
+CHUNK_SIZE = int(program.args[5])
+N_THREADS = int(program.args[6])
+N_PARALLEL = int(program.args[7])
+
+
+print_ln('Arguments:')
+print_ln('Programm: %s', program.args[0])
+print_ln('Iterations: %s', ITERATIONS)
+print_ln('Workers: %s', WORKERS)
+print_ln('Parameters: %s', PARAM_NUM)
+print_ln('Portnum: %s', PORTNUM)
+print_ln('Chunk Size: %s', CHUNK_SIZE)
+print_ln('Threads: %s', N_THREADS)
+print_ln('Parallel: %s', N_PARALLEL)
+print_ln()
+
+
+def main():
+    listen_for_clients(PORTNUM)
+    print_ln('Listening for client connections on base port %s', PORTNUM)
+
+
+    def loop(_=None):   # FLTrust aggregation with input and output sharing
+        print_ln('Starting aggregation')
+        client_id = sint(-1)
+        client_sockets = Array(1, regint)
+        client_sockets[0] = 0
+
+        # wait for client to connect
+        @do_while
+        def client_connections():
+            client_id = accept_client_connection(PORTNUM)
+
+            return client_id == -1
+
+        # Clients secret input
+        total = WORKERS * PARAM_NUM
+        batches = total // CHUNK_SIZE
+        rest = total - batches * CHUNK_SIZE
+        
+        client_values = Array(total, sfix)
+        
+        for i in range(batches):
+            client_values[i * CHUNK_SIZE:(i+1)*CHUNK_SIZE] = sfix.input_tensor_from_client(regint(0), [CHUNK_SIZE])
+        client_values[batches * CHUNK_SIZE:] = sfix.input_tensor_from_client(regint(0), [rest])
+        
+        
+        # FLTrust
+        # transform input
+        input = MultiArray([WORKERS, PARAM_NUM], sfix)
+
+        for i in range(WORKERS):
+            input[i] = client_values[i * PARAM_NUM:(i+1) * PARAM_NUM]
+
+        # dot product
+        dot = sfix.Array(WORKERS - 1)
+
+        @for_range_multithread(N_THREADS, N_PARALLEL, WORKERS - 1)
+        def _(i):
+            dot[i] = sfix.dot_product(input[i][:], input[WORKERS - 1][:])
+
+        # Euclidean norm
+        norm = sfix.Array(WORKERS)
+
+        def euclidean_norm(i):  # compute 2-norm of input[i]
+            @map_sum_opt(N_THREADS, PARAM_NUM, [sfix])
+            def summer(j):
+                return input[i][j] ** 2
+
+            return mpc_math.sqrt(summer())
+
+        for i in range(WORKERS):
+            norm[i] = euclidean_norm(i)
+
+        # ReLU clipped trust score
+        trust_score = sfix.Array(WORKERS - 1)
+
+        @for_range_multithread(N_THREADS, N_PARALLEL, WORKERS - 1)
+        def _(i):
+            trust_score[i] = ml.relu(dot[i] / (norm[i] * norm[WORKERS - 1]))
+
+        # updated aggregation
+        @map_sum_opt(N_THREADS, WORKERS - 1, [sfix])
+        def summer_ts(j):
+            return trust_score[j]
+
+        total_trust_score = summer_ts()
+
+        @for_range_multithread(N_THREADS, N_PARALLEL, WORKERS - 1)
+        def _(i):
+            input[i][:] = trust_score[i] / norm[i] * input[i][:]
+
+        global_model_update = sfix.Array(PARAM_NUM)
+        @for_range_opt(WORKERS - 1)
+        def _(i):
+            global_model_update[:] += input[i][:]
+    
+        global_model_update = norm[WORKERS - 1] / total_trust_score * global_model_update[:]
+
+        # output sharing
+        batches = PARAM_NUM // CHUNK_SIZE
+        rest = PARAM_NUM - batches * CHUNK_SIZE
+        
+        out = sfix.Array(CHUNK_SIZE)
+
+        for i in range(batches):
+            out.assign_vector(global_model_update[i*CHUNK_SIZE:(i+1)*CHUNK_SIZE])
+            out.reveal_to_clients(client_sockets)
+        
+        out = sfix.Array(rest)
+        out.assign_vector(global_model_update[batches*CHUNK_SIZE:batches*CHUNK_SIZE + rest])
+        out.reveal_to_clients(client_sockets)
+
+       
+        #disconnect client
+        closeclientconnection(regint(0))
+
+        return True
+        
+    print('run %d iterations' % ITERATIONS)
+    for_range(ITERATIONS)(loop)     # run aggregation of specified number of iterations
+
+main()
